@@ -529,6 +529,23 @@ footer{
 
 }
 
+
+/* =====================================================
+   NUEVO: CINCO ADVERTENCIAS NFPA 110
+   Mantiene el diseño y las tarjetas originales.
+   ===================================================== */
+.nfpa-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(185px,1fr));gap:12px}
+.nfpa-item{background:rgba(16,36,59,.96);border:1px solid var(--line);border-radius:12px;padding:15px}
+.nfpa-name{font-size:12px;font-weight:700;color:var(--muted);margin-bottom:10px}
+.nfpa-state{font-size:14px;font-weight:800;color:#cbd9e8}
+.nfpa-item.nfpa-active{border-color:var(--amber);background:rgba(120,65,12,.36)}
+.nfpa-item.nfpa-active .nfpa-state{color:#ffd17a}
+.nfpa-item.nfpa-normal .nfpa-state{color:var(--green)}
+.nfpa-status{color:var(--muted);font-size:13px;margin:0 0 14px}
+.export-btn{background:#176b94;border:1px solid #28b7ff;border-radius:12px;padding:13px 18px;color:white;font-weight:800;cursor:pointer}
+.export-btn:hover{filter:brightness(1.12)}
+.export-help{font-size:12px;color:var(--muted);margin-top:12px}
+
 </style>
 
 </head>
@@ -866,6 +883,33 @@ id="estadoMotor">
 </div>
 
 
+
+<!-- =====================================================
+     NUEVO: ADVERTENCIAS DEL REGISTRO 40016
+     Solo visualizacion; NO envia ordenes al PCC1301.
+     ===================================================== -->
+<div class="section" id="seccionNFPA">
+  <h2>Advertencias del PCC1301 · NFPA 110 (40016)</h2>
+  <p class="nfpa-status" id="nfpaEstado">Esperando lectura de advertencias...</p>
+  <div class="nfpa-grid">
+    <div class="nfpa-item" id="nfpaBateriaAlta"><div class="nfpa-name">Batería alta · 214</div><div class="nfpa-state">SIN DATOS</div></div>
+    <div class="nfpa-item" id="nfpaBateriaBaja"><div class="nfpa-name">Batería baja · 213</div><div class="nfpa-state">SIN DATOS</div></div>
+    <div class="nfpa-item" id="nfpaTemperaturaBaja"><div class="nfpa-name">Temperatura baja · 203</div><div class="nfpa-state">SIN DATOS</div></div>
+    <div class="nfpa-item" id="nfpaTemperaturaPrealta"><div class="nfpa-name">Temperatura prealta · 202</div><div class="nfpa-state">SIN DATOS</div></div>
+    <div class="nfpa-item" id="nfpaPresionPrebaja"><div class="nfpa-name">Presión prebaja de aceite · 215</div><div class="nfpa-state">SIN DATOS</div></div>
+  </div>
+</div>
+
+<!-- =====================================================
+     NUEVO: EXPORTACION A EXCEL MEDIANTE CSV
+     Registra solo mensajes recibidos con la pagina abierta.
+     ===================================================== -->
+<div class="section">
+  <h2>Exportar arranque y última lectura a Excel</h2>
+  <button class="export-btn" type="button" onclick="exportarExcel()">📥 Exportar a Excel (.csv)</button>
+  <div class="export-help" id="excelEstado">Esperando primer arranque. Se exportarán solo dos lecturas por prueba.</div>
+</div>
+
 <!-- =====================================================
      TELEMETRÍA
      ===================================================== -->
@@ -916,7 +960,7 @@ PCC1301 IoT Dashboard
 // =====================================================
 
 const MQTT_URL =
-"wss://whipcarver294:1984@whipcarver294.cloud.shiftr.io:443";
+"wss://whipcarver294.cloud.shiftr.io:443";
 
 
 const CLIENT_ID =
@@ -929,6 +973,10 @@ Math.random()
 // =====================================================
 // TOPICOS MQTT
 // =====================================================
+
+const TOPIC_ALARMAS_NFPA =
+"pcc1301/alarmas_nfpa";
+
 
 const TOPIC_TELEMETRIA =
 "pcc1301/telemetria";
@@ -964,8 +1012,162 @@ const TOPIC_CONTROL =
 
 let lastData = {};
 
+// Historial local de telemetria y estado NFPA, sin almacenamiento en la nube.
+let primeraLectura = null;
+let ultimaLecturaEnMarcha = null;
+let cicloEnMarcha = false;
+let cicloTerminado = false;
+let ultimoNFPA = null;
+
 let motorEncendido = false;
 
+
+// =====================================================
+// NUEVO: VISUALIZAR LOS CINCO BITS DEL REGISTRO 40016
+// Un mensaje MQTT contiene cinco indicadores booleanos.
+// "valido":false indica fallo Modbus, NO ausencia de alarma.
+// =====================================================
+function actualizarAdvertenciasNFPA(payload)
+{
+    let data;
+    try { data = JSON.parse(payload); }
+    catch(e) {
+        console.error("JSON NFPA invalido:", e);
+        marcarNFPANoDisponible("Mensaje de advertencias inválido");
+        return;
+    }
+
+    const campos = [
+        ["nfpaBateriaAlta", "bateria_alta"],
+        ["nfpaBateriaBaja", "bateria_baja"],
+        ["nfpaTemperaturaBaja", "temperatura_baja"],
+        ["nfpaTemperaturaPrealta", "temperatura_prealta"],
+        ["nfpaPresionPrebaja", "presion_prebaja"]
+    ];
+
+    if(data.valido !== true ||
+       !campos.every(([id, campo]) => typeof data[campo] === "boolean"))
+    {
+        marcarNFPANoDisponible("Lectura de advertencias no disponible");
+        return;
+    }
+
+    ultimoNFPA = {...data};
+    let activas = 0;
+    campos.forEach(([id, campo]) => {
+        const tarjeta = document.getElementById(id);
+        const activa = data[campo];
+        if(activa) activas++;
+        tarjeta.classList.toggle("nfpa-active", activa);
+        tarjeta.classList.toggle("nfpa-normal", !activa);
+        tarjeta.querySelector(".nfpa-state").textContent =
+            activa ? "⚠ ACTIVA" : "NORMAL";
+    });
+
+    document.getElementById("nfpaEstado").textContent =
+        activas ? "Advertencias activas: " + activas : "Sin advertencias activas";
+}
+
+function marcarNFPANoDisponible(texto)
+{
+    ultimoNFPA = null;
+    document.getElementById("nfpaEstado").textContent = texto;
+    ["nfpaBateriaAlta", "nfpaBateriaBaja", "nfpaTemperaturaBaja",
+     "nfpaTemperaturaPrealta", "nfpaPresionPrebaja"].forEach(id => {
+        const tarjeta = document.getElementById(id);
+        tarjeta.classList.remove("nfpa-active", "nfpa-normal");
+        tarjeta.querySelector(".nfpa-state").textContent = "SIN DATOS";
+    });
+}
+
+// =====================================================
+// NUEVO: DOS CAPTURAS POR CICLO DE FUNCIONAMIENTO
+// Registro 40011: estado 3 = motor en marcha.
+// La ultima muestra EN MARCHA se conserva al detectar parada.
+// No se reemplaza por valores de motor detenido.
+// =====================================================
+function registrarTelemetriaExcel(data)
+{
+    const campos = ["bateria", "presion_psi", "temperatura_f", "rpm", "estado_motor"];
+    if(!campos.every(campo => typeof data[campo] === "number" && Number.isFinite(data[campo])))
+        return;
+
+    const enMarcha = data.estado_motor === 3;
+    if(enMarcha)
+    {
+        const muestra = {
+            fecha: new Date().toLocaleString("es-PE"),
+            bateria: data.bateria,
+            presion: data.presion_psi,
+            temperatura: data.temperatura_f,
+            rpm: data.rpm,
+            motor: data.estado_motor,
+            nfpa: ultimoNFPA ? {...ultimoNFPA} : null
+        };
+        // Solo el primer registro del ciclo es inmutable.
+        if(!cicloEnMarcha)
+        {
+            primeraLectura = {...muestra};
+            cicloEnMarcha = true;
+        }
+        // Se actualiza hasta la ultima lectura del motor en marcha.
+        ultimaLecturaEnMarcha = {...muestra};
+        cicloTerminado = false;
+    }
+    else if(cicloEnMarcha)
+    {
+        // El motor ya no esta en estado 3: congelar ambas capturas.
+        cicloEnMarcha = false;
+        cicloTerminado = true;
+    }
+    const texto = cicloEnMarcha
+        ? "Motor en marcha: primera y última lectura conservadas."
+        : cicloTerminado
+          ? "Motor detenido: listas las dos lecturas para exportar."
+          : "Esperando primer arranque del motor.";
+    document.getElementById("excelEstado").textContent = texto;
+}
+
+// =====================================================
+// NUEVO: EXPORTACION DE SOLO DOS FILAS EN CSV PARA EXCEL
+// =====================================================
+function exportarExcel()
+{
+    if(!primeraLectura || !ultimaLecturaEnMarcha)
+    {
+        alert("Todavía no hay lecturas del motor en funcionamiento para exportar.");
+        return;
+    }
+    const columnas = [
+        "Momento", "Fecha y hora", "Batería (VDC)", "Presión (PSI)",
+        "Temperatura (°F)", "RPM", "Estado motor", "Batería alta",
+        "Batería baja", "Temperatura baja", "Temperatura prealta",
+        "Presión prebaja", "Lectura NFPA válida"
+    ];
+    const campoNFPA = (nfpa, nombre) => nfpa ? (nfpa[nombre] ? "ACTIVA" : "NORMAL") : "SIN DATOS";
+    const fila = (r, momento) => [
+        momento, r.fecha, r.bateria, r.presion, r.temperatura, r.rpm, "ENCENDIDO",
+        campoNFPA(r.nfpa, "bateria_alta"), campoNFPA(r.nfpa, "bateria_baja"),
+        campoNFPA(r.nfpa, "temperatura_baja"), campoNFPA(r.nfpa, "temperatura_prealta"),
+        campoNFPA(r.nfpa, "presion_prebaja"), r.nfpa ? "SI" : "NO"
+    ];
+    const filas = [
+        fila(primeraLectura, "PRIMER ARRANQUE"),
+        fila(ultimaLecturaEnMarcha, "ULTIMA LECTURA ANTES DE PARADA")
+    ];
+    const celda = valor => '"' + String(valor).replace(/"/g, '""') + '"';
+    const csv = "\uFEFFsep=;\r\n" + [columnas, ...filas]
+        .map(f => f.map(celda).join(";")).join("\r\n");
+    const blob = new Blob([csv], {type:"text/csv;charset=utf-8;"});
+    const url = URL.createObjectURL(blob);
+    const enlace = document.createElement("a");
+    enlace.href = url;
+    enlace.download = "PCC1301_arranque_parada_" + new Date().toISOString().slice(0,10) + ".csv";
+    document.body.appendChild(enlace);
+    enlace.click();
+    enlace.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 // =====================================================
 // CONEXIÓN MQTT
@@ -981,7 +1183,11 @@ MQTT_URL,
 
     reconnectPeriod: 3000,
 
-    connectTimeout: 10000
+    connectTimeout: 10000,
+
+    // Credenciales MQTT: configurar localmente antes de publicar.
+    username: "whipcarver294",
+    password: "1984"
 
 });
 
@@ -1011,7 +1217,9 @@ function()
 
         TOPIC_RPM,
 
-        TOPIC_ESTADO_MOTOR
+        TOPIC_ESTADO_MOTOR,
+
+        TOPIC_ALARMAS_NFPA
 
     ],
     function(err)
@@ -1045,6 +1253,7 @@ function()
       false,
       "Reconectando..."
     );
+    marcarNFPANoDisponible("Reconectando MQTT: advertencias no disponibles");
 
 });
 
@@ -1062,6 +1271,7 @@ function()
       false,
       "Sin conexión"
     );
+    marcarNFPANoDisponible("MQTT desconectado: advertencias no disponibles");
 
 });
 
@@ -1101,7 +1311,11 @@ function(topic,message)
       message.toString();
 
 
-    if(topic === TOPIC_TELEMETRIA)
+    if(topic === TOPIC_ALARMAS_NFPA)
+    {
+        actualizarAdvertenciasNFPA(payload);
+    }
+    else if(topic === TOPIC_TELEMETRIA)
     {
 
         try
@@ -1119,6 +1333,9 @@ function(topic,message)
 
 
             actualizarDashboard();
+
+            // Conservar solo la primera y la ultima lectura en marcha.
+            registrarTelemetriaExcel(data);
 
 
             document.getElementById(
