@@ -5,6 +5,8 @@
 
 <meta charset="UTF-8">
 
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
 <meta name="viewport"
       content="width=device-width, initial-scale=1.0">
 
@@ -906,7 +908,7 @@ id="estadoMotor">
      ===================================================== -->
 <div class="section">
   <h2>Exportar arranque y última lectura a Excel</h2>
-  <button class="export-btn" type="button" onclick="exportarExcel()">📥 Exportar a Excel (.csv)</button>
+  <button class="export-btn" type="button" onclick="exportarExcel()">📥 Exportar a Excel (.xlsx)</button>
   <div class="export-help" id="excelEstado">Esperando primer arranque. Se exportarán solo dos lecturas por prueba.</div>
 </div>
 
@@ -1129,44 +1131,57 @@ function registrarTelemetriaExcel(data)
 }
 
 // =====================================================
-// NUEVO: EXPORTACION DE SOLO DOS FILAS EN CSV PARA EXCEL
+// NUEVO: EXPORTACION DE DOS LECTURAS EN FORMATO EXCEL XLSXL
 // =====================================================
-function exportarExcel()
-{
-    if(!primeraLectura || !ultimaLecturaEnMarcha)
-    {
-        alert("Todavía no hay lecturas del motor en funcionamiento para exportar.");
-        return;
-    }
-    const columnas = [
-        "Momento", "Fecha y hora", "Batería (VDC)", "Presión (PSI)",
-        "Temperatura (°F)", "RPM", "Estado motor", "Batería alta",
-        "Batería baja", "Temperatura baja", "Temperatura prealta",
-        "Presión prebaja", "Lectura NFPA válida"
-    ];
-    const campoNFPA = (nfpa, nombre) => nfpa ? (nfpa[nombre] ? "ACTIVA" : "NORMAL") : "SIN DATOS";
-    const fila = (r, momento) => [
-        momento, r.fecha, r.bateria, r.presion, r.temperatura, r.rpm, "ENCENDIDO",
-        campoNFPA(r.nfpa, "bateria_alta"), campoNFPA(r.nfpa, "bateria_baja"),
-        campoNFPA(r.nfpa, "temperatura_baja"), campoNFPA(r.nfpa, "temperatura_prealta"),
-        campoNFPA(r.nfpa, "presion_prebaja"), r.nfpa ? "SI" : "NO"
-    ];
-    const filas = [
-        fila(primeraLectura, "PRIMER ARRANQUE"),
-        fila(ultimaLecturaEnMarcha, "ULTIMA LECTURA ANTES DE PARADA")
-    ];
-    const celda = valor => '"' + String(valor).replace(/"/g, '""') + '"';
-    const csv = "\uFEFFsep=;\r\n" + [columnas, ...filas]
-        .map(f => f.map(celda).join(";")).join("\r\n");
-    const blob = new Blob([csv], {type:"text/csv;charset=utf-8;"});
-    const url = URL.createObjectURL(blob);
-    const enlace = document.createElement("a");
-    enlace.href = url;
-    enlace.download = "PCC1301_arranque_parada_" + new Date().toISOString().slice(0,10) + ".csv";
-    document.body.appendChild(enlace);
-    enlace.click();
-    enlace.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+function exportarExcel() {
+  if (!primeraLectura || !ultimaLecturaEnMarcha) {
+    alert("Todavía no hay lecturas del motor en funcionamiento para exportar.");
+    return;
+  }
+
+  if (typeof XLSX === "undefined") {
+    alert("No se pudo cargar la biblioteca de Excel. Comprueba tu conexión a internet.");
+    return;
+  }
+
+  const columnas = [
+    "Registro G.E", "Fecha y hora", "Batería (VDC)", "Presión (PSI)",
+    "Temperatura (°F)", "RPM", "Estado motor", "Batería alta",
+    "Batería baja", "Temperatura baja", "Temperatura prealta",
+    "Presión prebaja", "Lectura NFPA válida"
+  ];
+
+  const campoNFPA = (nfpa, nombre) =>
+    nfpa ? (nfpa[nombre] ? "ACTIVA" : "NORMAL") : "SIN DATOS";
+
+  const fila = (r, momento) => [
+    momento, r.fecha, r.bateria, r.presion, r.temperatura, r.rpm,
+    "ENCENDIDO",
+    campoNFPA(r.nfpa, "bateria_alta"),
+    campoNFPA(r.nfpa, "bateria_baja"),
+    campoNFPA(r.nfpa, "temperatura_baja"),
+    campoNFPA(r.nfpa, "temperatura_prealta"),
+    campoNFPA(r.nfpa, "presion_prebaja"),
+    r.nfpa ? "SI" : "NO"
+  ];
+
+  const datos = [
+    columnas,
+    fila(primeraLectura, "PRIMERA LECTURA"),
+    fila(ultimaLecturaEnMarcha, "ULTIMA LECTURA ANTES DE PARADA")
+  ];
+
+  const hoja = XLSX.utils.aoa_to_sheet(datos);
+
+  hoja["!cols"] = columnas.map((nombre, i) => ({
+    wch: Math.max(nombre.length + 3, 16)
+  }));
+
+  const libro = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(libro, hoja, "Parámetros PCC1301");
+
+  XLSX.writeFile(libro, "Registro de Grupo Electrogeno.xlsx");
 }
 
 // =====================================================
